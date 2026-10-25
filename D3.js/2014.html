@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>Four-Quadrant Analysis</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  body { font-family: sans-serif; }
+  .tooltip {
+    position: absolute; pointer-events: none; opacity: 0;
+    background: rgba(0,0,0,.8); color: #fff;
+    padding: 6px 10px; border-radius: 4px; font-size: 12px; line-height: 1.5;
+  }
+  .quad-label { font-size: 12px; font-weight: bold; fill: gray; opacity: .75; }
+</style>
+</head>
+<body>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+const universityColors = { SMU: "#d62728", NUS: "#ff7f0e", NTU: "#1f77b4", SIT: "#27d62d" };
+const univMap = {
+  "Singapore Management University": "SMU",
+  "National University of Singapore": "NUS",
+  "Nanyang Technological University": "NTU",
+  "Singapore Institute of Technology": "SIT"
+};
+
+async function main() {
+  try {
+    const df = await d3.csv("data.csv", d3.autoType);
+    drawChart(df);
+  } catch (err) {
+    console.error(err);
+    d3.select("#chart").append("p").style("color", "red")
+      .text("資料載入失敗：" + err.message);
+  }
+}
+
+function drawChart(df) {
+  const margin = { top: 60, right: 40, bottom: 70, left: 80 };
+  const width  = 1100 - margin.left - margin.right;
+  const height = 800  - margin.top  - margin.bottom;
+
+  const df2014 = df.filter(d => d.year === 2014)
+    .map(d => ({ ...d, univ_abbr: univMap[d.university] }));
+  if (!df2014.length) return;
+
+  const nationalEmp    = df2014[0].emp_rate;
+  const nationalIncome = df2014[0].median_income_incl_emp_cpf;
+
+  const data = df2014.filter(d =>
+    d.gross_monthly_median != null && d.employment_rate_overall != null);
+
+  const svg = d3.select("#chart").append("svg")
+    .attr("width",  width  + margin.left + margin.right)
+    .attr("height", height + margin.top  + margin.bottom)
+    .append("g")
+    .attr("transform", `translate(${margin.left},${margin.top})`);
+
+  // ---- 比例尺 ----
+  const xMin = Math.min(2500, d3.min(data, d => d.gross_monthly_median) - 100);
+  const xMax = d3.max(data, d => d.gross_monthly_median) + 300;
+  const empValues = data.map(d => d.employment_rate_overall).concat(nationalEmp);
+  const yMin = Math.floor((d3.min(empValues) - 5) / 5) * 5;
+  const yMax = 102;
+  const x = d3.scaleLinear().domain([xMin, xMax]).range([0, width]);
+  const y = d3.scaleLinear().domain([yMin, yMax]).range([height, 0]);
+
+  // ---- 格線 ----
+  svg.append("g").attr("transform", `translate(0,${height})`)
+    .call(d3.axisBottom(x).tickSize(-height).tickFormat(""))
+    .call(g => g.selectAll("line").attr("stroke", "#ccc").attr("stroke-dasharray", "2,3"))
+    .call(g => g.select(".domain").remove());
+  svg.append("g")
+    .call(d3.axisLeft(y).tickSize(-width).tickFormat(""))
+    .call(g => g.selectAll("line").attr("stroke", "#ccc").attr("stroke-dasharray", "2,3"))
+    .call(g => g.select(".domain").remove());
+
+  // ---- 座標軸 ----
+  svg.append("g").attr("transform", `translate(0,${height})`).call(d3.axisBottom(x));
+  svg.append("g").call(d3.axisLeft(y));
+
+  // ---- 軸名稱 ----
+  svg.append("text")
+    .attr("x", width / 2).attr("y", height + 50)
+    .attr("text-anchor", "middle").style("font-size", "13px")
+    .text("Median Income (SGD)");
+
+  svg.append("text")
+    .attr("transform", "rotate(-90)")
+    .attr("x", -height / 2).attr("y", -55)
+    .attr("text-anchor", "middle").style("font-size", "13px")
+    .text("Employment Rate (%)");
+
+  // ---- 標題 ----
+  svg.append("text")
+    .attr("x", width / 2).attr("y", -25)
+    .attr("text-anchor", "middle")
+    .style("font-size", "16px").style("font-weight", "bold")
+    .text("2014 Singapore University Graduates' Four-Quadrant Analysis");
+
+  // ---- 四象限分隔線 ----
+  svg.append("line")
+    .attr("x1", 0).attr("x2", width)
+    .attr("y1", y(nationalEmp)).attr("y2", y(nationalEmp))
+    .attr("stroke", "red").attr("stroke-width", 1.5).attr("stroke-dasharray", "6,4");
+
+  svg.append("line")
+    .attr("x1", x(nationalIncome)).attr("x2", x(nationalIncome))
+    .attr("y1", 0).attr("y2", height)
+    .attr("stroke", "blue").attr("stroke-width", 1.5).attr("stroke-dasharray", "6,4");
+
+  // ---- 分隔線上的數值標示 ----
+  svg.append("text")
+    .attr("x", width - 5).attr("y", y(nationalEmp) - 6)
+    .attr("text-anchor", "end").attr("fill", "red")
+    .style("font-size", "12px").style("font-weight", "bold")
+    .text(`National Emp. Rate: ${nationalEmp}%`);
+
+  svg.append("text")
+    .attr("x", x(nationalIncome) + 6).attr("y", 14)
+    .attr("text-anchor", "start").attr("fill", "blue")
+    .style("font-size", "12px").style("font-weight", "bold")
+    .text(`National Median Income: $${nationalIncome}`);
+
+  // ---- 象限文字（支援換行）----
+  function addQuadLabel(px, py, text, anchor = "start") {
+    const lines = text.split("\n");
+    const t = svg.append("text").attr("class", "quad-label")
+      .attr("x", px).attr("y", py).attr("text-anchor", anchor);
+    lines.forEach((line, i) => {
+      t.append("tspan").attr("x", px).attr("dy", i === 0 ? 0 : "1.3em").text(line);
+    });
+  }
+
+  const xRight = x(nationalIncome) + 15;
+  const xLeft  = x(xMin) + 15;
+  const yTop    = y(98);
+  const yBottom = y(72);
+
+  // I 右上
+  addQuadLabel(xRight, yTop, "I: High Income\nHigh Employment");
+  // II 左上
+  addQuadLabel(xLeft,  yTop, "II: Low Income\nHigh Employment");
+  // III 左下
+  addQuadLabel(xLeft,  yBottom, "III: Low Income\nLow Employment");
+  // IV 右下
+  addQuadLabel(xRight, yBottom, "IV: High Income\nLow Employment");
+
+  // ---- 散布點 + Tooltip ----
+  const tooltip = d3.select("#tooltip");
+  svg.selectAll("circle.point")
+    .data(data).join("circle")
+    .attr("class", "point")
+    .attr("cx", d => x(d.gross_monthly_median))
+    .attr("cy", d => y(d.employment_rate_overall))
+    .attr("r", 6)
+    .attr("fill", d => universityColors[d.univ_abbr] || "#7f7f7f")
+    .attr("fill-opacity", 0.8)
+    .attr("stroke", "white").attr("stroke-width", 0.5)
+    .on("mouseover", function (event, d) {
+      d3.select(this).attr("r", 9).attr("stroke", "black");
+      tooltip.style("opacity", 1).html(
+        `<b>${d.degree}</b><br>${d.univ_abbr ?? d.university}<br>` +
+        `Income: $${d.gross_monthly_median}<br>` +
+        `Employment: ${d.employment_rate_overall}%`);
+    })
+    .on("mousemove", event => {
+      tooltip.style("left", (event.pageX + 12) + "px")
+             .style("top",  (event.pageY - 28) + "px");
+    })
+    .on("mouseout", function () {
+      d3.select(this).attr("r", 6).attr("stroke", "white");
+      tooltip.style("opacity", 0);
+    });
+
+  // ---- 圖例 ----
+  const items = [
+    ...Object.entries(universityColors).map(([name, color]) => ({ name, color, type: "rect" })),
+    { name: `National Emp. Rate (${nationalEmp}%)`, color: "red",  type: "line" },
+    { name: `National Median Income ($${nationalIncome})`, color: "blue", type: "line" }
+  ];
+  const lw = 270, lh = items.length * 22 + 35;
+  const legend = svg.append("g")
+    .attr("transform", `translate(${width - lw - 10},${height - lh - 10})`);
+  legend.append("rect").attr("width", lw).attr("height", lh)
+    .attr("fill", "white").attr("stroke", "#ccc").attr("rx", 4);
+  legend.append("text").attr("x", 10).attr("y", 20)
+    .style("font-weight", "bold").style("font-size", "12px").text("University");
+  items.forEach((it, i) => {
+    const g = legend.append("g").attr("transform", `translate(10,${35 + i * 22})`);
+    if (it.type === "rect") {
+      g.append("rect").attr("width", 18).attr("height", 12).attr("fill", it.color);
+    } else {
+      g.append("line").attr("x1", 0).attr("x2", 18).attr("y1", 6).attr("y2", 6)
+        .attr("stroke", it.color).attr("stroke-width", 1.5).attr("stroke-dasharray", "4,2");
+    }
+    g.append("text").attr("x", 26).attr("y", 11).style("font-size", "12px").text(it.name);
+  });
+}
+
+main();
+</script>
+</body>
+</html>
